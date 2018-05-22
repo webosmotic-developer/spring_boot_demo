@@ -1,12 +1,15 @@
 package com.wo.demo.controller;
 
+import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.servlet.ServletContext;
+import javax.servlet.http.HttpServletResponse;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -31,6 +35,7 @@ import com.wo.demo.auth.model.User;
 import com.wo.demo.auth.service.SecurityService;
 import com.wo.demo.auth.service.UserService;
 import com.wo.demo.auth.validator.UserValidator;
+import com.wo.demo.mail.MailClient;
 
 @RestController
 @CrossOrigin(origins = "http://localhost", maxAge = 3600)
@@ -44,8 +49,14 @@ public class PublicController {
 	@Value("${suspendedTimeIntervalInMilliSeconds}")
 	Long suspendedTimeIntervalInMilliSeconds;
 
+	@Value("${activation.redirect.path}")
+	String activationRedirectPath;
+
 	@Value("${limit}")
 	int limit;
+
+	@Autowired
+	MailClient mailClient;
 
 	@Autowired
 	private UserService userService;
@@ -64,11 +75,14 @@ public class PublicController {
 
 	@PostMapping(value = "/registration", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<User> registration(@RequestBody User userForm, BindingResult bindingResult) {
-		if ("google".equals(userForm.getProvider())) {
+		boolean isGoogleLogin = "google".equals(userForm.getProvider());
+		if (isGoogleLogin) {
 			if (userService.findByUsername(userForm.getUsername()) == null) {
+				userForm.setActive(true);
 				userValidator.validate(userForm, bindingResult);
 			}
 		} else {
+			userForm.setActive(false);
 			userValidator.validate(userForm, bindingResult);
 		}
 
@@ -83,6 +97,11 @@ public class PublicController {
 			roles.add(role);
 			userForm.setRoles(roles);
 			userService.save(userForm);
+			if (!userForm.isActive()) {
+				String encriptedUserName = bCryptPasswordEncoder.encode(userForm.getUsername());
+				mailClient.prepareAndSend(userForm.getUsername(), "Please verify your account here...." + "...."
+						+ "http://localhost:8080/public/verifyEmail/" + encriptedUserName);
+			}
 		}
 
 		User user = userService.findByUsername(userForm.getUsername());
@@ -99,6 +118,24 @@ public class PublicController {
 		} catch (UnknownHostException e) {
 			e.printStackTrace();
 		}
+	}
+
+	@GetMapping(value = "/verifyEmail/{userName}")
+	public void verifyEmail(@PathVariable String userName, HttpServletResponse response) throws IOException {
+
+		List<User> userList = userService.findAll();
+		if (!userList.isEmpty()) {
+			for (User user : userList) {
+				if (bCryptPasswordEncoder.matches(user.getUsername(), userName)) {
+					user.setActive(true);
+					userService.save(user);
+
+					user.setToken(securityService.generateJwtToken(user));
+					generateAPIKey(user);
+				}
+			}
+		}
+		response.sendRedirect(activationRedirectPath);
 	}
 
 	@PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -135,8 +172,8 @@ public class PublicController {
 	GenericResponse getHotelsByCityId(@PathVariable String aPIKey, @PathVariable String userName) {
 		GenericResponse genericResponse = new GenericResponse(500, "FAILED", null);
 		APIKey aPIKeyIns = null;
-		if (this.getServletContext().getAttribute(aPIKey) != null) {
-			aPIKeyIns = (APIKey) this.getServletContext().getAttribute(aPIKey);
+		if (this.servletContext.getAttribute(aPIKey) != null) {
+			aPIKeyIns = (APIKey) this.servletContext.getAttribute(aPIKey);
 			Long diffOfLastTime = System.currentTimeMillis() - aPIKeyIns.getLastHttpCallTimestamp();
 			if (aPIKeyIns.getCount().get() != 0) {
 				if (aPIKeyIns.getCount().get() <= limit) {
@@ -164,7 +201,7 @@ public class PublicController {
 				}
 			}
 		} else {
-			this.getServletContext().setAttribute(aPIKey, new APIKey(new AtomicInteger(1), System.currentTimeMillis()));
+			this.servletContext.setAttribute(aPIKey, new APIKey(new AtomicInteger(1), System.currentTimeMillis()));
 			getUser(userName, genericResponse, aPIKeyIns);
 		}
 		return genericResponse;
@@ -180,17 +217,4 @@ public class PublicController {
 			aPIKeyIns.setLastHttpCallTimestamp(System.currentTimeMillis());
 		}
 	}
-
-	public ServletContext getServletContext() {
-		return servletContext;
-	}
-
-	public Long getTimeIntervalPerRequestInMilliSeconds() {
-		return timeIntervalPerRequestInMilliSeconds;
-	}
-
-	public Long getSuspendedTimeIntervalInMilliSeconds() {
-		return suspendedTimeIntervalInMilliSeconds;
-	}
-
 }

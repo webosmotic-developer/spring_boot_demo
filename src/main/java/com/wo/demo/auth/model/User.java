@@ -25,6 +25,7 @@ public class User {
 	private String token;
 	private String provider;
 	private String apiKey;
+	private boolean active;
 
 	@Id
 	@GeneratedValue(strategy = GenerationType.AUTO)
@@ -96,6 +97,7 @@ public class User {
 		this.roles = roles;
 	}
 
+	@Transient
 	public String getProvider() {
 		return provider;
 	}
@@ -111,5 +113,14 @@ public class User {
 
 	public void setApiKey(String apiKey) {
 		this.apiKey = apiKey;
+	}
+
+	public void setActive(boolean isActive) {
+		this.active = isActive;
+	}
+	
+
+	public boolean isActive() {
+		return active;
 	}
 }
